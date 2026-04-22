@@ -1,0 +1,1 @@
+export { useInactivity } from './useInactivity';

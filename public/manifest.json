@@ -1,0 +1,16 @@
+{
+  "short_name": "SeniorShield",
+  "name": "Senior Shield Emergency App",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#DC2626",
+  "background_color": "#F9FAFB"
+}

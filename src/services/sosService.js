@@ -38,7 +38,10 @@ export const triggerSOS = async (uid, location, userProfile) => {
 
   const lat = location?.latitude;
   const lng = location?.longitude;
-  const trackingLink = `${window.location.origin}/track/${uid}`;
+  const baseUrl = window.location.hostname === "localhost"
+    ? "https://senior-sheild-4ec1d.web.app"
+    : window.location.origin;
+  const trackingLink = `${baseUrl}/track/${uid}`;
   const message = buildSOSMessage(
     userProfile.name || 'User',
     lat || 'Unknown',

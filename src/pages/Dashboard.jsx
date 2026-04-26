@@ -13,7 +13,8 @@ import MapView from '../components/MapView';
 import { BottomNav } from '../shared/components';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 import { useFallDetection } from '../hooks/useFallDetection';
-import { logSOS } from '../services/firestoreService';
+import { logSOS, createTrackingSession, endTrackingSession } from '../services/firestoreService';
+import { useLiveTracking } from '../hooks/useLiveTracking';
 import { sendNativeSMS } from '../services/sosService';
 
 const fetchWithTimeout = (url, options, timeout = 10000) => {
@@ -49,6 +50,9 @@ export default function Dashboard() {
   const [showSuccessAlert, setShowSuccessAlert] = React.useState(false);
   const [showFallAlert, setShowFallAlert] = React.useState(false);
   const [fallCountdown, setFallCountdown] = React.useState(15);
+  const [trackingSessionId, setTrackingSessionId] = React.useState(null);
+  const [trackingLink, setTrackingLink] = React.useState(null);
+  const [isCreatingSession, setIsCreatingSession] = React.useState(false);
 
   const { isSupported: fallSupported, isMonitoring, startMonitoring, stopMonitoring } = useFallDetection({
     enabled: true,
@@ -165,6 +169,9 @@ export default function Dashboard() {
 
       // 6. Start live tracking
       startTracking(currentUser.uid);
+      
+      // 7. Create tracking session and share link
+      await handleCreateTrackingSession();
 
       alert("SOS sent successfully 🚨");
       setShowSuccessAlert(true);
@@ -221,6 +228,72 @@ export default function Dashboard() {
 
   const { isInactive, resetTimer } = useInactivity();
   const [inactivityCountdown, setInactivityCountdown] = React.useState(15);
+
+  // Use live tracking hook
+  const { isTracking: liveTrackingActive } = useLiveTracking(trackingSessionId, !!trackingSessionId);
+
+  // Generate tracking session and share via SMS
+  const handleCreateTrackingSession = async () => {
+    if (!currentUser || isCreatingSession) return;
+    
+    try {
+      setIsCreatingSession(true);
+      console.log('📍 Creating tracking session...');
+      
+      const sessionId = await createTrackingSession(currentUser.uid);
+      console.log('✅ Tracking session created:', sessionId);
+
+      if (!sessionId) throw new Error('No session ID returned');
+
+      setTrackingSessionId(sessionId);
+      
+      const baseUrl = "https://senior-sheild-4ec1d.web.app";
+      const generatedLink = `${baseUrl}/track/${sessionId}`;
+      setTrackingLink(generatedLink);
+      
+      console.log('🔗 Tracking link:', generatedLink);
+      
+      const message = `🚨 Emergency Alert!\n\nTrack my live location:\n${generatedLink}\n\nSession expires in 1 hour.\n\n- Senior Shield`;
+      
+      // Share via SMS to emergency contacts
+      if (userProfile?.emergencyContacts?.length > 0) {
+        for (const contact of userProfile.emergencyContacts) {
+          try {
+            await sendNativeSMS(contact.phone, message);
+            console.log('📱 SMS sent to', contact.name);
+          } catch (err) {
+            console.error('❌ Failed to send SMS to', contact.name, ':', err);
+          }
+        }
+      }
+      
+      // Copy link to clipboard
+      navigator.clipboard.writeText(generatedLink);
+      console.log('📋 Link copied to clipboard');
+      
+      return sessionId;
+    } catch (error) {
+      console.error('❌ Failed to create tracking session:', error);
+      alert('Failed to create tracking session: ' + error.message);
+    } finally {
+      setIsCreatingSession(false);
+    }
+  };
+
+  // Stop tracking session
+  const handleStopTracking = async () => {
+    if (!trackingSessionId) return;
+    
+    try {
+      await endTrackingSession(trackingSessionId);
+      console.log('✅ Tracking session ended:', trackingSessionId);
+      setTrackingSessionId(null);
+      setTrackingLink(null);
+      alert('Live tracking stopped');
+    } catch (error) {
+      console.error('❌ Failed to stop tracking:', error);
+    }
+  };
 
   React.useEffect(() => {
     if (!isInactive) return;
@@ -328,48 +401,49 @@ export default function Dashboard() {
         }}
       />
 
-      {/* 1. HERO SECTION */}
-      <div className="px-4 py-4 bg-transparent">
-        <h1 className="text-[28px] font-bold text-gray-900 leading-none">
-          {t('dashboard.greeting')} {userProfile?.name?.split(' ')[0] || 'There'} 👋
+      {/* Header */}
+      <div className="px-4 pt-5 pb-1">
+        <h1 className="text-[22px] font-semibold text-gray-800">
+          Hi {userProfile?.name?.split(' ')[0] || 'There'}
         </h1>
       </div>
 
       {/* Main Content */}
       <div className="flex-1 px-4 pb-24 space-y-3">
         
-        {/* 1. STATUS PILL */}
-        <div className="text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-[#dcfce7] rounded-full">
-            <ShieldCheck className="text-green-600 w-4 h-4 shrink-0" />
-            <span className="text-[14px] font-semibold text-green-900">{t('dashboard.youAreSafe')}</span>
-          </div>
+        {/* Status Badges */}
+        <div className="flex gap-2 flex-wrap">
+          <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-medium">
+            You are Safe
+          </span>
+          {trackingSessionId && (
+            <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+              <span className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-pulse inline-block" />
+              Live Tracking Active
+            </span>
+          )}
         </div>
 
-        {/* 2. SOS BUTTON */}
-        <div className="flex flex-col items-center py-4">
+        {/* SOS Button */}
+        <div className="flex flex-col items-center py-5">
           <button
             onClick={() => {
-              if ('speechSynthesis' in window) {
-                window.speechSynthesis.speak(new SpeechSynthesisUtterance(t('dashboard.sosAlert')));
-              }
-              setShowSOSCountdown(true);  // Instead of triggering directly, this shows the countdown first!
+              if ('speechSynthesis' in window) window.speechSynthesis.speak(new SpeechSynthesisUtterance(t('dashboard.sosAlert')));
+              setShowSOSCountdown(true);
             }}
             disabled={sosActionLoading}
-            className={`w-[120px] h-[120px] bg-[#ef4444] rounded-full flex flex-col items-center justify-center text-white active:scale-[0.98] transition-transform shadow-[0_6px_16px_rgba(239,68,68,0.25)] flex-shrink-0 ${sosActionLoading ? 'opacity-75 bg-red-800' : ''}`}
+            className="w-32 h-32 rounded-full flex flex-col items-center justify-center active:scale-[0.97] transition-transform"
+            style={{ backgroundColor: sosActionLoading ? '#b91c1c' : '#dc2626', boxShadow: '0 8px 24px rgba(220,38,38,0.35)' }}
           >
-            {sosActionLoading ? (
-              <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
-            ) : (
-              <>
-                <AlertTriangle className="w-8 h-8 mb-1" />
-                <span className="text-[20px] font-bold tracking-widest uppercase leading-none">SOS</span>
-              </>
-            )}
+            {sosActionLoading
+              ? <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+              : <>
+                  <AlertTriangle style={{ color: '#ffffff', width: 28, height: 28, marginBottom: 4 }} />
+                  <span style={{ color: '#ffffff', fontSize: 20, fontWeight: 700, letterSpacing: 4 }}>SOS</span>
+                </>
+            }
           </button>
-          <div className="mt-3">
-             <span className="text-[14px] font-medium text-gray-600">{t('dashboard.tapForHelp')}</span>
-          </div>
+          <p className="text-gray-500 text-sm mt-3">{t('dashboard.tapForHelp')}</p>
         </div>
 
 
@@ -378,66 +452,73 @@ export default function Dashboard() {
           <div className="space-y-2">
             {[...userProfile.emergencyContacts]
               .map((c, i) => ({ ...c, isPrimary: userProfile.emergencyContacts.some(x => x.isPrimary) ? c.isPrimary : i === 0 }))
-              .sort((a, b) => (b.isPrimary === true ? 1 : 0) - (a.isPrimary === true ? 1 : 0))
-              .map((contact, idx) => {
-                const isPrimary = contact.isPrimary;
-                return (
-                  <a
-                    key={contact.id || idx}
-                    href={`tel:${contact.phone}`}
-                  onClick={() => {
-                    if ('speechSynthesis' in window) {
-                      window.speechSynthesis.speak(new SpeechSynthesisUtterance(
-                        t('dashboard.callPrimary') + ' ' + contact.name.split(' ')[0]
-                      ));
-                    }
-                  }}
-                  className={`w-full bg-white border p-[14px] rounded-[12px] flex flex-col gap-0.5 active:scale-[0.98] transition-transform shadow-sm text-left ${
-                    isPrimary ? 'border-green-300 bg-green-50' : 'border-[#eef2f7]'
-                  }`}
+              .sort((a, b) => (b.isPrimary ? 1 : 0) - (a.isPrimary ? 1 : 0))
+              .map((contact, idx) => (
+                <a
+                  key={contact.id || idx}
+                  href={`tel:${contact.phone}`}
+                  onClick={() => { if ('speechSynthesis' in window) window.speechSynthesis.speak(new SpeechSynthesisUtterance(t('dashboard.callPrimary') + ' ' + contact.name.split(' ')[0])); }}
+                  className="w-full border rounded-xl p-4 flex items-center justify-between active:scale-[0.98] transition-transform shadow-sm"
+                  style={{ borderColor: contact.isPrimary ? '#86efac' : '#eef2f7', backgroundColor: contact.isPrimary ? '#f0fdf4' : '#ffffff' }}
                 >
-                  <div className="flex items-center gap-2">
-                    <Phone className={`w-5 h-5 ${isPrimary ? 'text-green-700' : 'text-gray-700'}`} />
-                    <span className={`text-[16px] font-semibold ${isPrimary ? 'text-green-900' : 'text-gray-900'}`}>
-                      {t('dashboard.callPrimary')} {contact.name.split(' ')[0]}
-                    </span>
-                    {isPrimary && <span className="ml-auto text-[11px] font-bold text-green-700">⭐ {t('dashboard.primaryContact')}</span>}
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ backgroundColor: contact.isPrimary ? '#dcfce7' : '#f3f4f6' }}>
+                      <Phone style={{ color: contact.isPrimary ? '#16a34a' : '#6b7280', width: 16, height: 16 }} />
+                    </div>
+                    <div>
+                      <p className="text-[15px] font-semibold" style={{ color: contact.isPrimary ? '#15803d' : '#111827' }}>
+                        {t('dashboard.callPrimary')} {contact.name.split(' ')[0]}
+                      </p>
+                      <p className="text-[12px] text-gray-500">{contact.phone}</p>
+                    </div>
                   </div>
-                  <span className="text-[13px] text-gray-500 font-medium ml-7">{contact.phone}</span>
+                  {contact.isPrimary && (
+                    <span className="text-[11px] font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Primary</span>
+                  )}
                 </a>
-              );
-            })}
+              ))}
           </div>
         )}
 
-        {/* 4. LOCATION SECTION */}
-        <div className="bg-white border border-[#eef2f7] p-[14px] rounded-[12px] shadow-sm">
-          <div className="flex items-center gap-2 mb-2">
-            <MapPin className="w-5 h-5 text-gray-700 font-semibold" />
-            <span className="text-[16px] font-semibold text-gray-900">{t('dashboard.yourLocation')}</span>
+        {/* Share Location Button */}
+        {!trackingSessionId && (
+          <button
+            onClick={handleCreateTrackingSession}
+            disabled={isCreatingSession}
+            className="w-full py-3 rounded-xl font-semibold text-[14px] flex items-center justify-center gap-2 active:scale-95 transition-transform shadow-sm"
+            style={{ backgroundColor: isCreatingSession ? '#93c5fd' : '#2563eb', color: '#ffffff' }}
+          >
+            {isCreatingSession
+              ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Creating link...</>
+              : <><Share2 size={16} /> Share Location</>
+            }
+          </button>
+        )}
+
+        {/* Location Card */}
+        <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <MapPin className="w-4 h-4 text-gray-600" />
+            <span className="text-[15px] font-semibold text-gray-900">{t('dashboard.yourLocation')}</span>
           </div>
-          
           {location?.latitude ? (
-            <div className="relative h-[120px] rounded-[12px] overflow-hidden border border-[#e5e7eb] mt-1">
+            <div className="relative h-[120px] rounded-lg overflow-hidden border border-gray-100">
               <MapView lat={location?.latitude} lng={location?.longitude} />
-              <button 
-                onClick={() => {
-                  if ('speechSynthesis' in window) {
-                    window.speechSynthesis.speak(new SpeechSynthesisUtterance(t('dashboard.openMap')));
-                  }
-                  window.open(`https://www.google.com/maps?q=${location.latitude},${location.longitude}`, '_blank');
-                }}
-                className="absolute bottom-2 right-2 bg-[#2563eb] text-white px-2.5 py-1.5 rounded-[8px] text-[12px] font-medium active:scale-95 transition-transform shadow-md"
+              <button
+                onClick={() => window.open(`https://www.google.com/maps?q=${location.latitude},${location.longitude}`, '_blank')}
+                className="absolute bottom-2 right-2 px-2.5 py-1.5 rounded-lg text-[12px] font-medium"
+                style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
               >
                 {t('dashboard.openMap')}
               </button>
             </div>
           ) : (
-            <div className="h-[120px] rounded-[12px] border border-[#e5e7eb] mt-1 bg-gray-50 flex flex-col items-center justify-center gap-2">
-              <span className="text-[13px] font-medium text-gray-500">{t('dashboard.locationUnavailable')}</span>
-              <button 
+            <div className="h-[110px] rounded-lg border border-gray-100 bg-gray-50 flex flex-col items-center justify-center gap-2">
+              <p className="text-[13px] text-gray-500">{t('dashboard.locationUnavailable')}</p>
+              <button
                 onClick={getLocation}
-                className="bg-[#2563eb] text-white px-3 py-1.5 rounded-[8px] text-[12px] font-medium active:scale-95 transition-transform shadow-sm"
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium"
+                style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
               >
                 {t('dashboard.enableLocation')}
               </button>
@@ -445,16 +526,75 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* 5. MEDICAL INFO */}
-        {(userProfile?.medicalCondition || userProfile?.age) && (
-          <div className="bg-white border border-[#eef2f7] rounded-[12px] p-[14px] shadow-sm flex flex-col gap-0.5">
-            <div className="flex items-center gap-2">
-              <HeartPulse className="w-5 h-5 text-gray-700" />
-              <h2 className="text-[16px] font-semibold text-gray-900">{t('dashboard.medicalInfo')}</h2>
+        {/* Live Tracking Section */}
+        {trackingSessionId && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
+                <p className="text-[14px] font-semibold text-red-700">Live Tracking Active</p>
+              </div>
+              <button
+                onClick={handleStopTracking}
+                className="text-[12px] font-medium px-3 py-1.5 rounded-lg"
+                style={{ backgroundColor: '#dc2626', color: '#ffffff' }}
+              >
+                Stop
+              </button>
             </div>
-            <p className="text-[14px] font-medium text-gray-600 ml-7">
-              {[userProfile.medicalCondition, userProfile.age ? `${t('dashboard.age')} ${userProfile.age}` : ''].filter(Boolean).join(' • ')}
+
+            {trackingLink && (
+              <>
+                <div className="bg-white border border-red-100 rounded-lg px-3 py-2 flex items-center gap-2">
+                  <span className="text-[12px] text-gray-600 truncate font-mono flex-1">{trackingLink}</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(trackingLink); alert('Link copied!'); }}
+                    className="text-[12px] font-medium shrink-0"
+                    style={{ color: '#2563eb' }}
+                  >
+                    Copy
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <a
+                    href={trackingLink}
+                    target="_blank" rel="noopener noreferrer"
+                    className="flex-1 py-2 rounded-lg text-[13px] font-semibold text-center"
+                    style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
+                  >
+                    Open
+                  </a>
+                  <a
+                    href={`https://wa.me/?text=${encodeURIComponent(`Emergency! Track my live location: ${trackingLink}`)}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="flex-1 py-2 rounded-lg text-[13px] font-semibold text-center"
+                    style={{ backgroundColor: '#16a34a', color: '#ffffff' }}
+                  >
+                    Share
+                  </a>
+                </div>
+              </>
+            )}
+
+            <p className="text-[11px] text-gray-500">
+              Your location is being shared with emergency contacts.
             </p>
+          </div>
+        )}
+
+        {/* Medical Info */}
+        {(userProfile?.medicalCondition || userProfile?.age) && (
+          <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-2 mb-1">
+              <HeartPulse className="w-4 h-4 text-gray-600" />
+              <h2 className="text-[15px] font-semibold text-gray-900">{t('dashboard.medicalInfo')}</h2>
+            </div>
+            {userProfile.medicalCondition && (
+              <p className="text-[13px] text-gray-600 mt-1 ml-6">Condition: {userProfile.medicalCondition}</p>
+            )}
+            {userProfile.age && (
+              <p className="text-[13px] text-gray-600 ml-6">Age: {userProfile.age}</p>
+            )}
           </div>
         )}
 

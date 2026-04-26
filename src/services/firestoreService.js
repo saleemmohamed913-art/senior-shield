@@ -13,6 +13,7 @@ import {
   onSnapshot,
   deleteDoc,
   Timestamp,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -655,33 +656,7 @@ export const getLastActivityTime = async (uid) => {
 
 // ==================== REAL-TIME TRACKING OPERATIONS ====================
 
-/**
- * Create tracking session for guardian to view location
- */
-export const createTrackingSession = async (uid, expiryMinutes = 60) => {
-  try {
-    const token = `token_${uid}_${Date.now()}`;
-    const expiresAt = Date.now() + (expiryMinutes * 60 * 1000);
 
-    const sessionData = {
-      userId: uid,
-      token,
-      expiresAt,
-      createdAt: Timestamp.now(),
-    };
-
-    const trackingRef = await addDoc(
-      collection(db, 'trackingSessions'),
-      sessionData
-    );
-
-    console.log('✅ Tracking session created');
-    return { success: true, data: { sessionId: trackingRef.id, token } };
-  } catch (error) {
-    console.error('❌ Error creating tracking session:', error);
-    return { success: false, error: error.message };
-  }
-};
 
 /**
  * Validate tracking token for guardian access
@@ -801,5 +776,132 @@ export const subscribeToLocationUpdates = (uid, callback) => {
   } catch (error) {
     console.error('❌ Error subscribing to location:', error);
     return null;
+  }
+};
+
+// ==================== LIVE TRACKING SESSIONS ====================
+
+/**
+ * Generate a new tracking session and return the session ID
+ */
+export const createTrackingSession = async (uid, expiryMinutes = 60) => {
+  try {
+    const docRef = await addDoc(collection(db, "trackingSessions"), {
+      userId: uid,
+      createdAt: serverTimestamp(),
+      expiresAt: Date.now() + expiryMinutes * 60 * 1000,
+      active: true,
+    });
+
+    return docRef.id;
+
+  } catch (err) {
+    console.error("❌ Error creating tracking session:", err);
+    throw err;
+  }
+};
+
+/**
+ * Validate that a tracking session exists and is active
+ */
+export const validateTrackingSession = async (sessionId) => {
+  try {
+    const docSnap = await getDoc(doc(db, 'trackingSessions', sessionId));
+    
+    if (!docSnap.exists()) {
+      return { success: false, error: 'Session not found' };
+    }
+
+    const sessionData = docSnap.data();
+    
+    if (!sessionData.active) {
+      return { success: false, error: 'Session is inactive' };
+    }
+
+    if (sessionData.expiresAt < Date.now()) {
+      return { success: false, error: 'Session has expired' };
+    }
+
+    return { success: true, data: sessionData };
+  } catch (error) {
+    console.error('❌ Error validating session:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Update live location for a tracking session
+ */
+export const updateTrackingLocation = async (sessionId, latitude, longitude, accuracy) => {
+  try {
+    await updateDoc(doc(db, 'trackingSessions', sessionId), {
+      location: {
+        latitude,
+        longitude,
+        accuracy,
+      },
+      updatedAt: Timestamp.now(),
+    });
+    console.log('📍 Location updated for session:', sessionId);
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Error updating tracking location:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Get tracking session data
+ */
+export const getTrackingSession = async (sessionId) => {
+  try {
+    const docSnap = await getDoc(doc(db, 'trackingSessions', sessionId));
+    
+    if (!docSnap.exists()) {
+      return { success: false, error: 'Session not found' };
+    }
+
+    return { success: true, data: docSnap.data() };
+  } catch (error) {
+    console.error('❌ Error getting tracking session:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Subscribe to real-time tracking session updates
+ */
+export const subscribeToTrackingSession = (sessionId, callback) => {
+  try {
+    const unsub = onSnapshot(doc(db, 'trackingSessions', sessionId), (docSnap) => {
+      if (docSnap.exists()) {
+        callback({ success: true, data: docSnap.data() });
+      } else {
+        callback({ success: false, error: 'Session not found' });
+      }
+    });
+
+    return unsub;
+  } catch (error) {
+    console.error('❌ Error subscribing to tracking session:', error);
+    return null;
+  }
+};
+
+/**
+ * End a tracking session
+ */
+export const endTrackingSession = async (sessionId) => {
+  try {
+    await updateDoc(doc(db, 'trackingSessions', sessionId), {
+      active: false,
+      endedAt: Timestamp.now(),
+    });
+
+    console.log('✅ Tracking session ended:', sessionId);
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Error ending tracking session:', error);
+    return { success: false, error: error.message };
   }
 };

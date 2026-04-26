@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { User, Edit3, Phone, HeartPulse, Plus, AlertCircle, CheckCircle, Share2, Copy } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { updateUserProfile, removeEmergencyContact, addEmergencyContact, createTrackingSession } from '../services/firestoreService';
+import { useLiveTracking } from '../hooks/useLiveTracking';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { MEDICAL_CONDITIONS } from '../utils/constants';
@@ -57,7 +58,14 @@ export default function Profile() {
 
   const [showTrackingLink, setShowTrackingLink] = useState(false);
   const [trackingLink, setTrackingLink] = useState(null);
+  const [trackingSessionId, setTrackingSessionId] = useState(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
+
+  // 🔥 Auto-send live GPS to Firestore every 5s when a session is active
+  const { isTracking: liveTrackingActive, error: liveTrackingError } = useLiveTracking(
+    trackingSessionId,
+    !!trackingSessionId
+  );
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -180,16 +188,32 @@ export default function Profile() {
   };
 
   const handleGenerateTrackingLink = async () => {
+    console.log("🔥 BUTTON CLICKED");
+    if (!currentUser?.uid) {
+      setError("User not logged in");
+      return;
+    }
+
     setError(null);
     setTrackingLoading(true);
 
     try {
-      const session = await createTrackingSession(currentUser.uid);
-      if (session && session.token) {
-        const baseUrl = window.location.origin;
-        setTrackingLink(`${baseUrl}/track/${currentUser.uid}?token=${session.token}`);
+      console.log("👤 User:", currentUser);
+      const sessionId = await createTrackingSession(currentUser.uid);
+      console.log("✅ Session created:", sessionId);
+
+      if (sessionId) {
+        const baseUrl = "https://senior-sheild-4ec1d.web.app";
+        const link = `${baseUrl}/track/${sessionId}`;
+        console.log("🔗 Link:", link);
+        setTrackingLink(link);
+        setTrackingSessionId(sessionId); // 🔥 starts useLiveTracking
+        
+        navigator.clipboard.writeText(link);
+        setSuccessMessage(t('profile.linkCopied') || "Tracking link copied!");
       }
     } catch (err) {
+      console.error("❌ Tracking failed:", err);
       setError(err.message);
     } finally {
       setTrackingLoading(false);
@@ -395,21 +419,59 @@ export default function Profile() {
           </p>
           
           {trackingLink ? (
-             <div className="space-y-3">
-               <div className="flex items-center gap-2 bg-white p-2 rounded-[10px] border border-gray-200">
-                 <input type="text" readOnly value={trackingLink} className="flex-1 text-[13px] text-gray-600 outline-none bg-transparent font-mono truncate" />
-                 <button onClick={() => { navigator.clipboard.writeText(trackingLink); setSuccessMessage(t('messages.actionSuccessful')); }} className="p-2 text-[#2563eb] hover:bg-gray-100 rounded-[8px] active:scale-95">
+             <div className="space-y-3 bg-gray-50 border border-gray-100 rounded-[12px] p-4">
+               
+               <p className="text-[13px] text-green-700 font-bold mb-1 flex items-center gap-1.5">
+                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse blur-[1px]"></span>
+                 🟢 Tracking Active (Valid for 1 hour)
+               </p>
+
+               <div className="flex justify-between items-center bg-white p-2.5 rounded-[8px] border border-gray-200">
+                 <span className="text-[13px] text-gray-600 font-mono truncate mr-2">{trackingLink}</span>
+                 <button 
+                   onClick={() => { 
+                     navigator.clipboard.writeText(trackingLink); 
+                     setSuccessMessage("Link copied!"); 
+                     setTimeout(() => setSuccessMessage(null), 3000);
+                   }} 
+                   className="p-1.5 text-[#2563eb] bg-blue-50 hover:bg-blue-100 rounded-[6px] active:scale-95 transition-colors shrink-0"
+                 >
                    <Copy size={16} />
                  </button>
                </div>
-               <div className="flex gap-2">
+
+               <div className="grid grid-cols-2 gap-2 mt-2">
                   <button 
-                    onClick={() => navigator.share({ url: trackingLink }).catch(() => navigator.clipboard.writeText(trackingLink))}
-                    className="flex-1 font-medium text-[15px] text-white py-3 rounded-[12px] active:scale-[0.96]" style={{ background: '#2563eb' }}
+                    onClick={() => {
+                      if (navigator.share) {
+                        navigator.share({
+                          title: "Senior Shield - Live Tracking",
+                          text: "Track my live location:",
+                          url: trackingLink,
+                        }).catch(() => {});
+                      } else {
+                        navigator.clipboard.writeText(trackingLink);
+                        setSuccessMessage("Link copied!");
+                      }
+                    }}
+                    className="font-medium text-[13px] text-white py-2.5 rounded-[8px] active:scale-[0.96] shadow-sm flex items-center justify-center gap-1" style={{ background: '#2563eb' }}
                   >
-                    {t('profile.shareLink')}
+                    <Share2 size={14} /> Share Link
                   </button>
-                  <button onClick={() => setTrackingLink(null)} className="px-4 py-3 bg-[#e5e7eb] text-gray-800 font-medium rounded-[12px] text-[15px] active:scale-95">
+
+                  <a 
+                    href={`https://wa.me/?text=${encodeURIComponent(`🚨 Emergency! Track my live location:\n${trackingLink}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-[13px] text-white py-2.5 rounded-[8px] active:scale-[0.96] shadow-sm bg-green-600 hover:bg-green-700 flex items-center justify-center gap-1 text-center"
+                  >
+                    WhatsApp
+                  </a>
+
+                  <button 
+                    onClick={() => setTrackingLink(null)} 
+                    className="col-span-2 py-2.5 bg-[#e5e7eb] text-gray-800 font-medium rounded-[8px] text-[13px] active:scale-95 mt-1"
+                  >
                     {t('common.close')}
                   </button>
                </div>

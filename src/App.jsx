@@ -13,6 +13,7 @@ import OCR from './pages/OCR';
 import SOSHistory from './pages/SOSHistory';
 import Settings from './pages/Settings';
 import GuardianTrack from './pages/GuardianTrack';
+import TrackingSession from './pages/TrackingSession';
 import NotFound from './pages/NotFound';
 import LoadingScreen from './components/LoadingScreen';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -69,6 +70,9 @@ function AppRoutes() {
 
         {/* Public Guardian Tracking Route — token-gated inside the page */}
         <Route path="/track/:uid" element={<GuardianTrack />} />
+
+        {/* Live Tracking Session Route */}
+        <Route path="/track-session/:sessionId" element={<TrackingSession />} />
 
         {/* Default */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
